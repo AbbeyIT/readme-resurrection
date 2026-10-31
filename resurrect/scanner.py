@@ -128,7 +128,10 @@ def _parse_pyproject(path: Path) -> list[str]:
         data = tomllib.loads(_read(path))
     except Exception:
         return []
-    deps = list(data.get("project", {}).get("dependencies", []))
+    project = data.get("project", {})
+    deps = list(project.get("dependencies", []))
+    for group in project.get("optional-dependencies", {}).values():
+        deps += list(group)
     return [m.group(0) for d in deps if (m := re.match(r"[A-Za-z0-9_.\-]+", d))]
 
 

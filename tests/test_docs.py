@@ -1,5 +1,11 @@
 from resurrect.docs import (
-    build_facts_block, clean_output, generate_readme, known_commands,
+    DOCS,
+    build_facts_block,
+    clean_output,
+    generate_doc,
+    generate_readme,
+    known_commands,
+    tooling_files,
 )
 from resurrect.gitinfo import GitFacts
 from resurrect.scanner import RepoFacts
@@ -74,3 +80,42 @@ def test_facts_block_license_type():
     facts.license_type = None
     block = build_facts_block(facts, sample_git(), {})
     assert "type not detected" in block
+
+def test_known_commands_includes_pytest():
+    facts = sample_facts()
+    facts.dependencies["pyproject.toml"] = ["typer", "pytest"]
+    assert "python -m pytest" in known_commands(facts)
+
+
+def test_tooling_files():
+    facts = sample_facts()
+    facts.tree += [".flake8", ".github/workflows/ci.yml", "src/app.py"]
+    found = tooling_files(facts)
+    assert ".flake8" in found
+    assert ".github/workflows/ci.yml" in found
+    assert "src/app.py" not in found
+
+
+def test_file_tree_only_for_architecture():
+    facts = sample_facts()
+    plain = build_facts_block(facts, sample_git(), {})
+    with_tree = build_facts_block(facts, sample_git(), {}, include_tree=True)
+    assert "File tree:" not in plain
+    assert "File tree:" in with_tree
+
+
+def test_generate_doc_uses_the_right_task():
+    seen = {}
+
+    def fake_chat(prompt, system=None, config=None, stream=False, on_token=None):
+        seen["prompt"], seen["system"] = prompt, system
+        return "# ok"
+
+    for kind, marker in [
+        ("setup", "## Prerequisites"),
+        ("architecture", "## Components"),
+        ("contributing", "## Submitting changes"),
+    ]:
+        generate_doc(kind, sample_facts(), sample_git(), {}, chat_fn=fake_chat)
+        assert marker in seen["prompt"]
+        assert DOCS[kind].filename in seen["system"]

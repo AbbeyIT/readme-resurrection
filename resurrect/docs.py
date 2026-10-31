@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -19,21 +20,84 @@ RULES = (
     "6) Output Markdown only, with no preamble and no closing remarks."
 )
 
-README_SYSTEM = (
-    "You write README.md files for software repositories from facts supplied by the user. " + RULES
-)
-
-README_TASK = (
-    "Write README.md with these sections: a '# ' title using the repository name; "
-    "a short description of 2-3 sentences; '## Features' (bullets based on the file summaries); "
-    "'## Installation'; "
-    "'## Usage' (show only a command from the VERIFIED COMMANDS list or the command-line "
-    "entry points, and suggest running it with --help; do not describe arguments or options); "
-    "'## Project structure' (key folders and files); "
+LICENSE_TASK = (
     "'## License' (state the license type only if the facts give one; if the type is not "
     "detected, name the license file and do not guess the type; if there is no license file, "
     "write 'unknown')."
 )
+
+
+@dataclass(frozen=True)
+class DocSpec:
+    filename: str
+    task: str
+    include_tree: bool = False
+
+
+DOCS: dict[str, DocSpec] = {
+    "readme": DocSpec(
+        "README.md",
+        "Write README.md with these sections: a '# ' title using the repository name; "
+        "a short description of 2-3 sentences; '## Features' (bullets based on the file "
+        "summaries); '## Installation'; "
+        "'## Usage' (show only a command from the VERIFIED COMMANDS list or the command-line "
+        "entry points, and suggest running it with --help; do not describe arguments or "
+        "options); '## Project structure' (key folders and files); " + LICENSE_TASK,
+    ),
+    "setup": DocSpec(
+        "SETUP.md",
+        "Write SETUP.md with these sections: '# Setup'; "
+        "'## Prerequisites' (the language runtime or tools implied by the languages and "
+        "dependency files; write 'version: unknown' because versions are not in the facts; "
+        "mention an external service only if the file summaries mention it); "
+        "'## Installation' (only commands from the VERIFIED COMMANDS list, in order, and say "
+        "which folder to run them in); "
+        "'## Running' (only a VERIFIED COMMAND or a command-line entry point, otherwise "
+        "'TODO: confirm'); "
+        "'## Running tests' (only a VERIFIED COMMAND, otherwise 'TODO: confirm'); "
+        "'## Open questions' (a short bullet list of anything the facts could not answer).",
+    ),
+    "architecture": DocSpec(
+        "ARCHITECTURE.md",
+        "Write ARCHITECTURE.md with these sections: '# Architecture'; "
+        "'## Overview' (2-3 sentences); "
+        "'## Directory layout' (key folders and files from the file tree, one line each); "
+        "'## Components' (one bullet per file that has a summary: the file path, then what it "
+        "does, in your own words from the summary); "
+        "'## How the pieces fit together' (describe connections only where the summaries or "
+        "entry points make them clear, otherwise write 'TODO: confirm'); "
+        "'## Dependencies' (list only the dependency names given in the facts); "
+        "'## Unknowns' (bullets for anything the facts could not answer).",
+        include_tree=True,
+    ),
+    "contributing": DocSpec(
+        "CONTRIBUTING.md",
+        "Write CONTRIBUTING.md with these sections: '# Contributing'; "
+        "'## Getting started' (only commands from the VERIFIED COMMANDS list); "
+        "'## Running tests' (only a VERIFIED COMMAND, otherwise 'TODO: confirm'); "
+        "'## Code style' (name only tools that appear in the tooling and config files list; "
+        "if there are none, write 'No style tools detected'); "
+        "'## Where to start' (point to the entry points and key folders); "
+        "'## Submitting changes' (a generic pull request workflow in four short steps: "
+        "create a branch, make the change with tests, run the tests, open a pull request; "
+        "do not invent project-specific rules, labels, or reviewers).",
+    ),
+}
+
+TOOLING_NAMES = {
+    ".eslintrc", ".eslintrc.json", ".eslintrc.js", ".eslintrc.cjs", ".prettierrc",
+    ".prettierrc.json", ".editorconfig", ".flake8", "ruff.toml", ".ruff.toml", "tox.ini",
+    "setup.cfg", ".pre-commit-config.yaml", "mypy.ini", ".pylintrc", "pytest.ini",
+    ".golangci.yml", "rustfmt.toml", "Dockerfile", "docker-compose.yml",
+    "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "CHANGELOG.md",
+}
+
+
+def system_for(spec: DocSpec) -> str:
+    return (
+        f"You write {spec.filename} files for software repositories from facts supplied "
+        "by the user. " + RULES
+    )
 
 
 def known_commands(facts: RepoFacts) -> list[str]:
@@ -55,9 +119,19 @@ def known_commands(facts: RepoFacts) -> list[str]:
         cmds.append("mvn package")
     if "Gemfile" in files:
         cmds.append("bundle install")
+    all_deps = {n.lower() for names in facts.dependencies.values() for n in names}
+    if "pytest" in all_deps:
+        cmds.append("python -m pytest")
     cmds += [f"{name} --help" for name in facts.cli_commands]
     cmds += [f"make {target}" for target in facts.make_targets]
     return list(dict.fromkeys(cmds))  # remove duplicates, keep order
+
+
+def tooling_files(facts: RepoFacts) -> list[str]:
+    return [
+        p for p in facts.tree
+        if Path(p).name in TOOLING_NAMES or p.startswith(".github/workflows/")
+    ]
 
 
 def build_facts_block(
@@ -65,6 +139,7 @@ def build_facts_block(
     git: GitFacts,
     summaries: dict[str, str],
     max_chars: int = MAX_FACTS_CHARS,
+    include_tree: bool = False,
 ) -> str:
     lines = [f"Repository name: {facts.name}"]
     if git.is_repo and git.last_commit_date:
@@ -75,14 +150,18 @@ def build_facts_block(
         lines.append(f"Commits: {count}")
     lines.append(f"Files: {facts.file_count}")
     if facts.languages:
-        lines.append("Languages (file counts): " + ", ".join(f"{k} {v}" for k, v in facts.languages.items()))
+        lines.append(
+            "Languages (file counts): " + ", ".join(f"{k} {v}" for k, v in facts.languages.items())
+        )
     lines.append("Dependency files: " + (", ".join(facts.dependency_files) or "none"))
     for rel, names in facts.dependencies.items():
         shown = ", ".join(names[:15]) + (" ..." if len(names) > 15 else "")
         lines.append(f"Dependencies in {rel}: {shown}")
     lines.append("Entry points: " + (", ".join(facts.entry_points) or "none found"))
     if facts.scripts:
-        lines.append("package.json scripts: " + "; ".join(f"{k} = {v}" for k, v in facts.scripts.items()))
+        lines.append(
+            "package.json scripts: " + "; ".join(f"{k} = {v}" for k, v in facts.scripts.items())
+        )
     if facts.make_targets:
         lines.append("Makefile targets: " + ", ".join(facts.make_targets))
     if facts.cli_commands:
@@ -91,6 +170,8 @@ def build_facts_block(
             + ", ".join(f"{name} -> {target}" for name, target in facts.cli_commands.items())
         )
     lines.append("Test locations: " + (", ".join(facts.test_locations) or "none found"))
+    tooling = tooling_files(facts)[:15]
+    lines.append("Tooling and config files: " + (", ".join(tooling) or "none found"))
     if facts.license_file:
         kind = facts.license_type or "type not detected"
         lines.append(f"License file: {facts.license_file} (license type: {kind})")
@@ -100,6 +181,12 @@ def build_facts_block(
 
     top = sorted({p.split("/")[0] + ("/" if "/" in p else "") for p in facts.tree})[:40]
     lines.append("Top-level contents: " + ", ".join(top))
+    if include_tree:
+        shown = facts.tree[:40]
+        more = len(facts.tree) - len(shown)
+        lines.append(
+            "File tree: " + ", ".join(shown) + (f" ... (+{more} more)" if more > 0 else "")
+        )
 
     commands = known_commands(facts)
     lines.append(
@@ -107,9 +194,7 @@ def build_facts_block(
         + (" | ".join(commands) if commands else "none")
     )
 
-    block = "\n".join(lines)
-    header = "\n\nFILE SUMMARIES:\n"
-    out = block + header
+    out = "\n".join(lines) + "\n\nFILE SUMMARIES:\n"
     for rel, summary in summaries.items():
         entry = f"- {rel}: {summary}\n"
         if len(out) + len(entry) > max_chars:
@@ -130,7 +215,8 @@ def clean_output(text: str) -> str:
     return text.strip() + "\n"
 
 
-def generate_readme(
+def generate_doc(
+    kind: str,
     facts: RepoFacts,
     git: GitFacts,
     summaries: dict[str, str],
@@ -138,16 +224,21 @@ def generate_readme(
     chat_fn: Callable = chat,
     on_token: Callable[[str], None] | None = None,
 ) -> str:
-    block = build_facts_block(facts, git, summaries)
-    prompt = f"{block}\n\n{README_TASK}"
+    spec = DOCS[kind]
+    block = build_facts_block(facts, git, summaries, include_tree=spec.include_tree)
+    prompt = f"{block}\n\n{spec.task}"
     raw = chat_fn(
         prompt,
-        system=README_SYSTEM,
+        system=system_for(spec),
         config=config,
         stream=on_token is not None,
         on_token=on_token,
     )
     return clean_output(raw)
+
+
+def generate_readme(facts, git, summaries, config=None, chat_fn=chat, on_token=None) -> str:
+    return generate_doc("readme", facts, git, summaries, config, chat_fn, on_token)
 
 
 def write_doc(out_dir: str | Path, filename: str, text: str) -> Path:
@@ -173,11 +264,12 @@ if __name__ == "__main__":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
 
-    parser = argparse.ArgumentParser(description="Generate README.md for a repo.")
+    parser = argparse.ArgumentParser(description="Generate documentation for a repo.")
     parser.add_argument("target", nargs="?", default=".")
     parser.add_argument("--out", default="resurrected")
     parser.add_argument("--max-files", type=int, default=8)
     parser.add_argument("--model", default=LLMConfig().model)
+    parser.add_argument("--only", nargs="+", choices=list(DOCS), default=list(DOCS))
     args = parser.parse_args()
 
     console = Console()
@@ -188,10 +280,12 @@ if __name__ == "__main__":
         git_facts = get_git_facts(folder)
         console.print("Summarizing key files (cached results load instantly)...")
         file_summaries = summarize_repo(repo_facts, cfg, max_files=args.max_files)
-        console.print("Writing README.md...\n")
-        text = generate_readme(
-            repo_facts, git_facts, file_summaries, cfg,
-            on_token=lambda t: print(t, end="", flush=True),
-        )
-    path = write_doc(args.out, "README.md", text)
-    console.print(f"\n\nSaved to {path}")
+        for kind in args.only:
+            spec = DOCS[kind]
+            console.print(f"\n[bold]Writing {spec.filename}...[/bold]\n")
+            text = generate_doc(
+                kind, repo_facts, git_facts, file_summaries, cfg,
+                on_token=lambda t: print(t, end="", flush=True),
+            )
+            path = write_doc(args.out, spec.filename, text)
+            console.print(f"\n\nSaved to {path}")

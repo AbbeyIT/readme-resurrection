@@ -44,18 +44,22 @@ DOCS: dict[str, DocSpec] = {
         "entry points, and suggest running it with --help; do not describe arguments or "
         "options); '## Project structure' (key folders and files); " + LICENSE_TASK,
     ),
-    "setup": DocSpec(
+        "setup": DocSpec(
         "SETUP.md",
         "Write SETUP.md with these sections: '# Setup'; "
-        "'## Prerequisites' (the language runtime or tools implied by the languages and "
-        "dependency files; write 'version: unknown' because versions are not in the facts; "
-        "mention an external service only if the file summaries mention it); "
+        "'## Prerequisites' (the language runtime implied by the languages and dependency "
+        "files; give the Python version requirement if the facts state one, otherwise write "
+        "'version: unknown'; mention an external service only if the file summaries mention "
+        "it); "
         "'## Installation' (only commands from the VERIFIED COMMANDS list, in order, and say "
-        "which folder to run them in); "
+        "which folder to run them in; if there are optional dependency groups, give the "
+        "command that installs them and say what they contain); "
         "'## Running' (only a VERIFIED COMMAND or a command-line entry point, otherwise "
         "'TODO: confirm'); "
-        "'## Running tests' (only a VERIFIED COMMAND, otherwise 'TODO: confirm'); "
-        "'## Open questions' (a short bullet list of anything the facts could not answer).",
+        "'## Running tests' (only a VERIFIED COMMAND, otherwise 'TODO: confirm'; say if the "
+        "test tool is in an optional group that must be installed first); "
+        "'## Open questions' (a short bullet list of anything the facts could not answer; "
+        "write 'None' if there is nothing; do not mention tooling or config files).",
     ),
     "architecture": DocSpec(
         "ARCHITECTURE.md",
@@ -64,9 +68,10 @@ DOCS: dict[str, DocSpec] = {
         "'## Directory layout' (key folders and files from the file tree, one line each); "
         "'## Components' (one bullet per file that has a summary: the file path, then what it "
         "does, in your own words from the summary); "
-        "'## How the pieces fit together' (describe connections only where the summaries or "
-        "entry points make them clear, otherwise write 'TODO: confirm'); "
-        "'## Dependencies' (list only the dependency names given in the facts); "
+        "'## How the pieces fit together' (one bullet per entry under 'Internal imports', in "
+        "the form 'X imports Y'; do not describe calls, data flow, or purpose beyond that; "
+        "if the facts say imports are none or not available, write 'TODO: confirm'); "
+        "'## Dependencies' (list only the runtime dependency names given in the facts); "
         "'## Unknowns' (bullets for anything the facts could not answer).",
         include_tree=True,
     ),
@@ -108,6 +113,7 @@ def known_commands(facts: RepoFacts) -> list[str]:
         cmds.append("pip install -r requirements.txt")
     if "pyproject.toml" in files or "setup.py" in files:
         cmds.append("pip install .")
+        cmds += [f'pip install ".[{extra}]"' for extra in facts.optional_dependencies]
     if "package.json" in files:
         cmds.append("npm install")
         cmds += [f"npm run {name}" for name in facts.scripts]
@@ -120,6 +126,7 @@ def known_commands(facts: RepoFacts) -> list[str]:
     if "Gemfile" in files:
         cmds.append("bundle install")
     all_deps = {n.lower() for names in facts.dependencies.values() for n in names}
+    all_deps |= {n.lower() for names in facts.optional_dependencies.values() for n in names}
     if "pytest" in all_deps:
         cmds.append("python -m pytest")
     cmds += [f"{name} --help" for name in facts.cli_commands]
@@ -155,6 +162,13 @@ def build_facts_block(
         )
     lines.append("Dependency files: " + (", ".join(facts.dependency_files) or "none"))
     for rel, names in facts.dependencies.items():
+        if facts.python_requires:
+            lines.append(f"Python version requirement: {facts.python_requires}")
+        if facts.optional_dependencies:
+            lines.append(
+                "Optional dependency groups (not installed by default): "
+                + "; ".join(f"{g}: {', '.join(n)}" for g, n in facts.optional_dependencies.items())
+            )
         shown = ", ".join(names[:15]) + (" ..." if len(names) > 15 else "")
         lines.append(f"Dependencies in {rel}: {shown}")
     lines.append("Entry points: " + (", ".join(facts.entry_points) or "none found"))
@@ -187,6 +201,15 @@ def build_facts_block(
         lines.append(
             "File tree: " + ", ".join(shown) + (f" ... (+{more} more)" if more > 0 else "")
         )
+
+        if facts.imports:
+            lines.append("Internal imports (Python files, read from the code):")
+            for rel, targets in list(facts.imports.items())[:25]:
+                lines.append(f"- {rel} imports {', '.join(targets)}")
+        elif any(p.endswith(".py") for p in facts.tree):
+            lines.append("Internal imports: none found")
+        else:
+            lines.append("Internal imports: not available for this language")
 
     commands = known_commands(facts)
     lines.append(

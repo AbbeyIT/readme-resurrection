@@ -66,3 +66,32 @@ def test_license_type_and_output_folder(tmp_path):
 def test_unknown_license_type(tmp_path):
     (tmp_path / "LICENSE").write_text("Some custom terms nobody recognizes.")
     assert scan(tmp_path).license_type is None
+
+
+def test_python_import_graph(tmp_path):
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "a.py").write_text("from pkg import b\nimport os\n")
+    (pkg / "b.py").write_text("from . import c\nfrom .c import thing\n")
+    (pkg / "c.py").write_text("thing = 1\n")
+    (pkg / "d.py").write_text("if __name__ == '__main__':\n    from pkg import c\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_a.py").write_text("import pkg.a\n")
+    facts = scan(tmp_path)
+    assert facts.imports["pkg/a.py"] == ["pkg/b.py"]
+    assert facts.imports["pkg/b.py"] == ["pkg/c.py"]
+    assert "pkg/c.py" not in facts.imports
+    assert "pkg/d.py" not in facts.imports  # imports inside the main guard are ignored
+    assert not any(k.startswith("tests/") for k in facts.imports)
+
+
+def test_python_requires_and_extras(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "d"\nrequires-python = ">=3.10"\ndependencies = ["typer>=0.12"]\n\n'
+        '[project.optional-dependencies]\ndev = ["pytest>=8"]\n'
+    )
+    facts = scan(tmp_path)
+    assert facts.python_requires == ">=3.10"
+    assert facts.optional_dependencies == {"dev": ["pytest"]}
+    assert facts.dependencies["pyproject.toml"] == ["typer"]

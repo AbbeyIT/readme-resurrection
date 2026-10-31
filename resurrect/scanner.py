@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import os
 import re
 from collections import Counter
@@ -80,6 +81,9 @@ class RepoFacts:
     test_locations: list[str] = field(default_factory=list)
     license_file: str | None = None
     license_type: str | None = None
+    python_requires: str | None = None
+    optional_dependencies: dict[str, list[str]] = field(default_factory=dict)
+    imports: dict[str, list[str]] = field(default_factory=dict)
     readme_file: str | None = None
 
     def to_dict(self) -> dict:
@@ -128,11 +132,102 @@ def _parse_pyproject(path: Path) -> list[str]:
         data = tomllib.loads(_read(path))
     except Exception:
         return []
-    project = data.get("project", {})
-    deps = list(project.get("dependencies", []))
-    for group in project.get("optional-dependencies", {}).values():
-        deps += list(group)
+    deps = list(data.get("project", {}).get("dependencies", []))
     return [m.group(0) for d in deps if (m := re.match(r"[A-Za-z0-9_.\-]+", d))]
+
+
+def _parse_pyproject_meta(path: Path) -> tuple[str | None, dict[str, list[str]]]:
+    """Return (requires-python, {extra name: dependency names})."""
+    if tomllib is None:
+        return None, {}
+    try:
+        data = tomllib.loads(_read(path))
+    except Exception:
+        return None, {}
+    project = data.get("project", {})
+    extras = {}
+    for group, deps in project.get("optional-dependencies", {}).items():
+        extras[group] = [m.group(0) for d in deps if (m := re.match(r"[A-Za-z0-9_.\-]+", d))]
+    requires = project.get("requires-python")
+    return (str(requires) if requires else None), extras
+
+
+def _is_test_path(rel: str) -> bool:
+    parts = rel.lower().split("/")
+    return any(p in TEST_DIRS for p in parts[:-1]) or parts[-1].startswith("test_")
+
+
+def _is_main_guard(node: ast.AST) -> bool:
+    """True for `if __name__ == "__main__":` blocks, which hold demo code, not structure."""
+    return (
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "__name__"
+    )
+
+
+def _python_module_names(tree: list[str]) -> dict[str, str]:
+    mods = {}
+    for rel in sorted(tree):
+        if not rel.endswith(".py"):
+            continue
+        dotted = rel[:-3].replace("/", ".")
+        if dotted.endswith(".__init__"):
+            dotted = dotted[: -len(".__init__")]
+        elif dotted == "__init__":
+            continue
+        mods[dotted] = rel
+    return mods
+
+
+def _resolve_module(name: str, mods: dict[str, str]) -> str | None:
+    if not name:
+        return None
+    if name in mods:
+        return mods[name]
+    for dotted, rel in mods.items():  # handles src/ layouts: pkg.mod vs src.pkg.mod
+        if dotted.endswith("." + name):
+            return rel
+    return None
+
+
+def _python_imports(root: Path, tree: list[str]) -> dict[str, list[str]]:
+    """Which repo files import which other repo files, read from the code itself."""
+    mods = _python_module_names(tree)
+    graph: dict[str, list[str]] = {}
+    for rel in tree:
+        if not rel.endswith(".py") or _is_test_path(rel):
+            continue
+        try:
+            module = ast.parse(_read(root / rel))
+        except (SyntaxError, ValueError):
+            continue
+        package = rel[:-3].split("/")[:-1]
+        found: set[str] = set()
+        for top in module.body:
+            if _is_main_guard(top):
+                continue
+            for node in ast.walk(top):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        target = _resolve_module(alias.name, mods)
+                        if target:
+                            found.add(target)
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level:
+                        base = package[: max(len(package) - (node.level - 1), 0)]
+                        prefix = ".".join(base + ([node.module] if node.module else []))
+                    else:
+                        prefix = node.module or ""
+                    for alias in node.names:
+                        target = _resolve_module(f"{prefix}.{alias.name}", mods) or _resolve_module(prefix, mods)
+                        if target:
+                            found.add(target)
+        found.discard(rel)
+        if found:
+            graph[rel] = sorted(found)
+    return graph
 
 
 def _parse_go_mod(path: Path) -> list[str]:
@@ -213,6 +308,9 @@ def scan(path: str | Path) -> RepoFacts:
                 elif filename == "pyproject.toml":
                     names = _parse_pyproject(file_path)
                     facts.cli_commands.update(_parse_pyproject_scripts(file_path))
+                    requires, extras = _parse_pyproject_meta(file_path)
+                    facts.python_requires = facts.python_requires or requires
+                    facts.optional_dependencies.update(extras)
                 elif filename == "go.mod":
                     names = _parse_go_mod(file_path)
                 elif filename == "Cargo.toml":
@@ -241,6 +339,7 @@ def scan(path: str | Path) -> RepoFacts:
     facts.languages = dict(langs.most_common())
     facts.entry_points = sorted(set(facts.entry_points))
     facts.test_locations = sorted(set(facts.test_locations))
+    facts.imports = _python_imports(root, facts.tree)
     return facts
 
 

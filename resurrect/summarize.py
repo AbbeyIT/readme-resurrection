@@ -8,7 +8,7 @@ from typing import Callable
 from resurrect.llm import LLMConfig, chat
 from resurrect.scanner import LANGUAGES, TEST_DIRS, RepoFacts
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 CACHE_DIR = ".resurrect-cache"
 CACHE_FILE = "summaries.json"
 SKIP_LANGUAGES = {"HTML", "CSS"}
@@ -19,7 +19,10 @@ SYSTEM_PROMPT = (
     "Write a summary of 2 to 3 sentences describing what the file does, based only "
     "on the code shown. Name the main functions, classes, or exports. Do not guess "
     "about code you cannot see. If the file was shortened, say nothing about the "
-    "omitted part. Reply with the summary only: no preamble and no headings."
+    "omitted part. "
+    "If the file ends with an `if __name__ == \"__main__\":` block, treat it as a demo and "
+    "do not describe it as the purpose of the file. "
+    "Reply with the summary only: no preamble and no headings."
 )
 
 

@@ -31,6 +31,9 @@ def test_known_commands():
     assert "make build" in cmds
     assert "cargo build" not in cmds
     assert known_commands(RepoFacts(root=".", name="x")) == []
+    facts = sample_facts()
+    facts.cli_commands = {"demo": "demo.cli:app"}
+    assert "demo --help" in known_commands(facts)
 
 
 def test_facts_block_contents_and_budget():
@@ -62,3 +65,12 @@ def test_generate_readme_sends_facts_and_rules():
     assert "Never invent commands" in seen["system"]
     assert "pip install -r requirements.txt" in seen["prompt"]
     assert "## Installation" in seen["prompt"]
+
+def test_facts_block_license_type():
+    facts = sample_facts()
+    facts.license_type = "MIT"
+    block = build_facts_block(facts, sample_git(), {})
+    assert "License file: LICENSE (license type: MIT)" in block
+    facts.license_type = None
+    block = build_facts_block(facts, sample_git(), {})
+    assert "type not detected" in block

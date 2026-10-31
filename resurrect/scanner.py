@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "env", "__pycache__", "build",
     "dist", ".idea", ".vscode", ".tox", ".mypy_cache", ".pytest_cache",
-    "target", ".resurrect-cache", ".gradle", "vendor",
+    "target", ".resurrect-cache", ".gradle", "vendor", "resurrected",
 }
 
 LANGUAGES = {
@@ -39,6 +39,26 @@ ENTRY_POINT_NAMES = {
     "main.go", "main.rs", "Main.java", "Program.cs",
 }
 
+LICENSE_MARKERS = [
+    ("gnu affero general public license", "AGPL"),
+    ("gnu lesser general public license", "LGPL"),
+    ("gnu general public license", "GPL"),
+    ("mozilla public license", "MPL"),
+    ("apache license", "Apache"),
+    ("permission is hereby granted, free of charge", "MIT"),
+    ("redistribution and use in source and binary forms", "BSD"),
+    ("this is free and unencumbered software", "Unlicense"),
+    ("isc license", "ISC"),
+]
+
+
+def _detect_license(path: Path) -> str | None:
+    text = " ".join(_read(path)[:4000].lower().split())
+    for marker, name in LICENSE_MARKERS:
+        if marker in text:
+            return name
+    return None
+
 TEST_DIRS = {"test", "tests", "__tests__", "spec", "specs"}
 MAX_TREE = 2000
 
@@ -55,9 +75,11 @@ class RepoFacts:
     dependencies: dict[str, list[str]] = field(default_factory=dict)
     entry_points: list[str] = field(default_factory=list)
     scripts: dict[str, str] = field(default_factory=dict)
+    cli_commands: dict[str, str] = field(default_factory=dict)
     make_targets: list[str] = field(default_factory=list)
     test_locations: list[str] = field(default_factory=list)
     license_file: str | None = None
+    license_type: str | None = None
     readme_file: str | None = None
 
     def to_dict(self) -> dict:
@@ -132,6 +154,16 @@ def _parse_makefile(path: Path) -> list[str]:
     targets = re.findall(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*):(?!=)", _read(path), re.M)
     return sorted(set(targets))
 
+def _parse_pyproject_scripts(path: Path) -> dict[str, str]:
+    if tomllib is None:
+        return {}
+    try:
+        data = tomllib.loads(_read(path))
+    except Exception:
+        return {}
+    scripts = data.get("project", {}).get("scripts", {})
+    return {str(name): str(target) for name, target in scripts.items()}
+
 
 def scan(path: str | Path) -> RepoFacts:
     root = Path(path).resolve()
@@ -142,7 +174,9 @@ def scan(path: str | Path) -> RepoFacts:
     langs: Counter[str] = Counter()
 
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info")
+        )
         current = Path(dirpath)
         rel_dir = current.relative_to(root)
 
@@ -175,6 +209,7 @@ def scan(path: str | Path) -> RepoFacts:
                     names = _parse_requirements(file_path)
                 elif filename == "pyproject.toml":
                     names = _parse_pyproject(file_path)
+                    facts.cli_commands.update(_parse_pyproject_scripts(file_path))
                 elif filename == "go.mod":
                     names = _parse_go_mod(file_path)
                 elif filename == "Cargo.toml":
@@ -190,6 +225,7 @@ def scan(path: str | Path) -> RepoFacts:
             if current == root:
                 if lower.startswith(("license", "copying")) and not facts.license_file:
                     facts.license_file = rel
+                    facts.license_type = _detect_license(file_path)
                 if lower.startswith("readme") and not facts.readme_file:
                     facts.readme_file = rel
                 if filename in ("Makefile", "makefile"):

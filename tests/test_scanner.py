@@ -35,3 +35,34 @@ def test_scan_skips_junk_and_parses_deps(tmp_path):
     assert not any("node_modules" in f for f in facts.tree)
     assert facts.dependencies["requirements.txt"] == ["requests", "flask"]
     assert facts.dependencies["package.json"] == ["express"]
+
+def test_scan_skips_egg_info_and_reads_cli_commands(tmp_path):
+    (tmp_path / "pkg.egg-info").mkdir()
+    (tmp_path / "pkg.egg-info" / "PKG-INFO").write_text("x")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\n\n[project.scripts]\ndemo = "demo.cli:app"\n'
+    )
+    facts = scan(tmp_path)
+    assert not any("egg-info" in f for f in facts.tree)
+    assert facts.cli_commands == {"demo": "demo.cli:app"}
+
+MIT_TEXT = (
+    "MIT License\n\nCopyright (c) 2026 Someone\n\n"
+    "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+    "of this software and associated documentation files (the Software), to deal\n"
+)
+
+
+def test_license_type_and_output_folder(tmp_path):
+    (tmp_path / "LICENSE").write_text(MIT_TEXT)
+    (tmp_path / "resurrected").mkdir()
+    (tmp_path / "resurrected" / "README.md").write_text("old output")
+    (tmp_path / "main.py").write_text("print('hi')")
+    facts = scan(tmp_path)
+    assert facts.license_type == "MIT"
+    assert not any(f.startswith("resurrected") for f in facts.tree)
+
+
+def test_unknown_license_type(tmp_path):
+    (tmp_path / "LICENSE").write_text("Some custom terms nobody recognizes.")
+    assert scan(tmp_path).license_type is None

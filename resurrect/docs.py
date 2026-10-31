@@ -15,7 +15,8 @@ RULES = (
     "3) Never invent commands, flags, URLs, package names, or features. "
     "Only use shell commands that appear in the VERIFIED COMMANDS list. "
     "4) Mention file paths from the facts where helpful. "
-    "5) Output Markdown only, with no preamble and no closing remarks."
+    "5) Never describe command-line arguments or options unless they appear in the facts. "
+    "6) Output Markdown only, with no preamble and no closing remarks."
 )
 
 README_SYSTEM = (
@@ -25,8 +26,13 @@ README_SYSTEM = (
 README_TASK = (
     "Write README.md with these sections: a '# ' title using the repository name; "
     "a short description of 2-3 sentences; '## Features' (bullets based on the file summaries); "
-    "'## Installation'; '## Usage'; '## Project structure' (key folders and files); "
-    "'## License' (name the license file if one exists, otherwise write 'unknown')."
+    "'## Installation'; "
+    "'## Usage' (show only a command from the VERIFIED COMMANDS list or the command-line "
+    "entry points, and suggest running it with --help; do not describe arguments or options); "
+    "'## Project structure' (key folders and files); "
+    "'## License' (state the license type only if the facts give one; if the type is not "
+    "detected, name the license file and do not guess the type; if there is no license file, "
+    "write 'unknown')."
 )
 
 
@@ -49,6 +55,7 @@ def known_commands(facts: RepoFacts) -> list[str]:
         cmds.append("mvn package")
     if "Gemfile" in files:
         cmds.append("bundle install")
+    cmds += [f"{name} --help" for name in facts.cli_commands]
     cmds += [f"make {target}" for target in facts.make_targets]
     return list(dict.fromkeys(cmds))  # remove duplicates, keep order
 
@@ -78,8 +85,17 @@ def build_facts_block(
         lines.append("package.json scripts: " + "; ".join(f"{k} = {v}" for k, v in facts.scripts.items()))
     if facts.make_targets:
         lines.append("Makefile targets: " + ", ".join(facts.make_targets))
+    if facts.cli_commands:
+        lines.append(
+            "Command-line entry points (from pyproject.toml): "
+            + ", ".join(f"{name} -> {target}" for name, target in facts.cli_commands.items())
+        )
     lines.append("Test locations: " + (", ".join(facts.test_locations) or "none found"))
-    lines.append("License file: " + (facts.license_file or "none"))
+    if facts.license_file:
+        kind = facts.license_type or "type not detected"
+        lines.append(f"License file: {facts.license_file} (license type: {kind})")
+    else:
+        lines.append("License file: none")
     lines.append("Existing README: " + (facts.readme_file or "none"))
 
     top = sorted({p.split("/")[0] + ("/" if "/" in p else "") for p in facts.tree})[:40]

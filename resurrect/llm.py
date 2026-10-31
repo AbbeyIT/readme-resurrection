@@ -19,7 +19,7 @@ class LLMConfig:
     model: str = DEFAULT_MODEL
     base_url: str = DEFAULT_URL
     temperature: float = 0.2
-    num_ctx: int = 8192
+    num_ctx: int = 4096 #prompt size
     timeout: float = 900.0  # seconds to wait for the model; CPU-only runs are slow
 
 

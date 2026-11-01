@@ -119,3 +119,19 @@ def test_generate_doc_uses_the_right_task():
         generate_doc(kind, sample_facts(), sample_git(), {}, chat_fn=fake_chat)
         assert marker in seen["prompt"]
         assert DOCS[kind].filename in seen["system"]
+
+def test_architecture_import_section_is_written_by_code():
+    facts = sample_facts()
+    facts.imports = {"a.py": ["b.py", "c.py"], "b.py": ["c.py"]}
+
+    def fake_chat(prompt, system=None, config=None, stream=False, on_token=None):
+        return (
+            "# Architecture\n\n## How the pieces fit together\n- invented claim\n\n"
+            "## Dependencies\n- x\n"
+        )
+
+    out = generate_doc("architecture", facts, sample_git(), {}, chat_fn=fake_chat)
+    assert "invented claim" not in out
+    assert "- `a.py` imports `b.py`, `c.py`." in out
+    assert "- `b.py` imports `c.py`." in out
+    assert "## Dependencies" in out

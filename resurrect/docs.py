@@ -237,6 +237,37 @@ def clean_output(text: str) -> str:
             text = stripped[:-3]
     return text.strip() + "\n"
 
+FIT_HEADING = "## How the pieces fit together"
+
+
+def import_section_body(facts: RepoFacts) -> str | None:
+    """Render the import graph as bullets, straight from the code (no model)."""
+    if not facts.imports:
+        return None
+    return "\n".join(
+        f"- `{src}` imports " + ", ".join(f"`{t}`" for t in targets) + "."
+        for src, targets in sorted(facts.imports.items())
+    )
+
+
+def replace_section(text: str, heading: str, body: str) -> str:
+    """Replace the body under `heading`, or insert the section before Dependencies."""
+    lines = text.rstrip("\n").split("\n")
+    block = [heading, "", *body.split("\n"), ""]
+    start = next((i for i, line in enumerate(lines) if line.strip() == heading), None)
+    if start is None:
+        dep = next(
+            (i for i, line in enumerate(lines) if line.strip().startswith("## Dependencies")),
+            len(lines),
+        )
+        new = lines[:dep] + block + lines[dep:]
+    else:
+        end = next(
+            (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+            len(lines),
+        )
+        new = lines[:start] + block + lines[end:]
+    return "\n".join(new).rstrip("\n") + "\n"
 
 def generate_doc(
     kind: str,
@@ -257,7 +288,12 @@ def generate_doc(
         stream=on_token is not None,
         on_token=on_token,
     )
-    return clean_output(raw)
+    text = clean_output(raw)
+    if kind == "architecture":
+        body = import_section_body(facts)
+        if body:
+            text = replace_section(text, FIT_HEADING, body)
+    return text
 
 
 def generate_readme(facts, git, summaries, config=None, chat_fn=chat, on_token=None) -> str:
